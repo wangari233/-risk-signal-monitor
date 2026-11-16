@@ -1,6 +1,6 @@
 **TRANSACTION RISK SIGNAL MONITOR PROJECT**
 
-**Problem Statement**
+## Problem Statement
 
 Currently, PesaWay uses configurable, rule-based screening on both collections and payouts. These checks cover transaction limits, short-period volume, shared destinations, rapid corporate activity, unusually large first transactions and risk lists. Each decision records the triggered rule, the reason and the review outcome.
 
@@ -24,10 +24,10 @@ The monitor checks each transaction against the rules below. Each triggered rule
 
 | **Number** | **Risk signal** | **What it detects** | **Activation** | **Points** |
 |----|----|----|----|----|
-| 1 | Repeated failed attempts. | Several failed attempts from one account to another in a short time. | 3 or more failed attempts within 10 minutes. You can flag only if the next attempt succeeds. | 30 |
+| 1 | Repeated failed attempts. | Several failed attempts from one account to another in a short time, especially followed by  success |To process a transaction when the same corporate has 3 or more failed attempts within the 10 minutes up to and including that transaction's time. | 30 |
 | 2 | Duplicate reference. | The same transaction reference is submitted more than once. | A reference that already exists is submitted again. | 40 |
-| 3 | Amount far from normal activity. | A transaction much larger than the account’s own usual activity. | Amount is more than 5 times the account’s average of previous successful transactions. | 25 |
-| 4 | Rapid funding then payout. | Money coming in and going out immediately. | A payout of 80% or more of a recent deposit within 30 minutes. | 30 |
+| 3 | Amount far from normal activity. | A transaction much larger than the account’s own usual activity. | Amount is more than 5 times the account’s average of previous successful transactions. Otherwise the rule is skipped and the output says so.| 25 |
+| 4 | Rapid funding then payout. | Money coming in and going out immediately. | A payout of 80% or more of a recent deposit within 30 minutes. | 35 |
 
 **Scoring and results**
 
@@ -162,7 +162,7 @@ The monitor reads earlier transactions and submissions for the same corporate to
 
 **Invalid input:** Is rejected with a clear message and not recorded as a normal transaction.
 
-**Duplicate reference:** Is logged in Submission Log, flagged with the duplicate rile and no second transaction is created.
+**Duplicate reference:** Is logged in Submission Log, flagged with the duplicate rule and no second transaction is created.
 
 **New account with fewer than 5 transactions** skips the amount rule and the output says so.
 
@@ -180,7 +180,7 @@ The monitor will be tested with synthetic data only.
 
 | **Rule** | **Should activate** | **Should not activate** | **Boundary** |
 |----|----|----|----|
-| Repeated failed attempts | 3 failures within 10 minutes | 2 failures | Exactly 3 failures; failure at exactly 10 minutes |
+| Repeated failed attempts |The 3rd failure within 10 minutes; a success right after 3 failures | 2 failures; 3 failures spread over an hour | A failure exactly 10 minutes earlier counts; 10 minutes 1 second earlier does not |
 | Duplicate reference | Same reference submitted twice | Two different references | Same reference after a long gap |
 | Amount far from normal | 6 times the average with 5 or more past transactions | 2 times the average | Exactly 5 times the average; exactly 5 past transactions. |
 | Rapid funding then payout | Payout of 90% of a deposit within 20 minutes | Payout of 50%; payout 2 hours later | Exactly 80% exactly 30 minutes |
@@ -260,7 +260,7 @@ Amounts are decimal values with two decimal places in Kenyan Shillings.
 | **Column** | **Purpose** |
 |----|----|
 | Corporate, reference, type, amount, currency, status, destination, created_at | The transaction input fields |
-| expected_result | The result you expect is Low Risk, Reviewed Required or High Risk which is used to check the monitor’s output |
+| expected_result | The result you expect is Low Risk, Review Required or High Risk which is used to check the monitor’s output |
 | Scenario | A short label such as normal or rapid_funding_payout so that you can see what each row is meant to test |
 
 3.  **Scenarios to generate**
@@ -293,7 +293,25 @@ Hand-written fixtures cover the boundary and bad-input cases, since exact values
 
 6.  **Where it lives in the project**
 
-<img src="media/image1.png" style="width:6.05833in;height:2.05833in" />
+```
+risk-signal-monitor/
+  config/
+  monitor/
+    models.py
+    rules.py
+    scoring.py
+    tests/
+  data/
+    sample_transactions.csv
+    test_fixtures/
+  scripts/
+    generate_data.py
+  docs/
+    proposal.md
+  manage.py
+  requirements.txt
+  README.md
+```
 
 7.  **Limits**
 
