@@ -12,6 +12,7 @@ from .models import (
     TriggeredRule,
 )
 
+
 class RiskModelTests(TestCase):
     def setUp(self):
         self.corporate = Corporate.objects.create(name="Corporate A")
@@ -96,6 +97,7 @@ class TransactionModelTests(TestCase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 self.make_transaction()
+                
     def test_zero_amount_is_rejected(self):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
