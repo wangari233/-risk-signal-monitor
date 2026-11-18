@@ -2,7 +2,9 @@
 
 An additional risk-signal monitor for PesaWay that checks synthetic transactions against explainable rules, assigns a risk score and labels each transaction as Low Risk, Review Required or High Risk. It only flags transactions for human review.
 
-Status: proposal stage. Code to follow after approval.
+## Status
+
+In development.Data models, admin and model tests are done. The risk rules are in progress. 
 
 ## Documentation
 
