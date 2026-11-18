@@ -33,7 +33,7 @@ class TransactionAdmin(NoDeleteAdmin):
 
 @admin.register(SubmissionLog)
 class SubmissionLogAdmin(NoDeleteAdmin):
-    list_display = ("reference", "received_at", "accepted")
+    list_display = ("reference", "corporate", "received_at", "accepted")
     list_filter = ("accepted",)
 
 

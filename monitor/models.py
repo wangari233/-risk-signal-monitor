@@ -44,7 +44,15 @@ class Transaction(models.Model):
     def __str__(self):
         return self.reference
 
+
 class SubmissionLog(models.Model):
+    corporate = models.ForeignKey(
+        Corporate, 
+        on_delete=models.PROTECT, 
+        null=True,
+        blank=True,
+        related_name="submissions"
+    )
     reference = models.CharField(max_length=64, db_index=True)
     received_at = models.DateTimeField(default=timezone.now)
     accepted = models.BooleanField()
