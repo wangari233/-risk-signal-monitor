@@ -1,8 +1,10 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 from django.test import TestCase
+from django.utils import timezone
 
 from .models import (
     Corporate,
@@ -11,7 +13,7 @@ from .models import (
     Transaction,
     TriggeredRule,
 )
-
+from .rules import check_repeated_failures
 
 class RiskModelTests(TestCase):
     def setUp(self):
@@ -97,7 +99,7 @@ class TransactionModelTests(TestCase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 self.make_transaction()
-                
+
     def test_zero_amount_is_rejected(self):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
