@@ -16,8 +16,8 @@ class Transaction(models.Model):
         PAYOUT = "PAYOUT", "Payout"
 
     class Status(models.TextChoices):
-          SUCCESSFUL = "SUCCESSFUL", "Successful"
-          FAILED = "FAILED", "Failed"
+        SUCCESSFUL = "SUCCESSFUL", "Successful"
+        FAILED = "FAILED", "Failed"
 
     corporate = models.ForeignKey(
         Corporate, on_delete=models.PROTECT, related_name="transactions"
@@ -45,13 +45,12 @@ class Transaction(models.Model):
         return self.reference
 
 class SubmissionLog(models.Model):
-        reference = models.CharField(max_length=64, db_index=True)
-        received_at = models.DateTimeField(default=timezone.now)
-        accepted = models.BooleanField()
+    reference = models.CharField(max_length=64, db_index=True)
+    received_at = models.DateTimeField(default=timezone.now)
+    accepted = models.BooleanField()
 
-        def __str__(self):
-            return f"{self.reference}  ({'accepted' if self.accepted else 'rejected'})"
-
+    def __str__(self):
+        return f"{self.reference} ({'accepted' if self.accepted else 'rejected'})"
 
 class RiskAssessment(models.Model):
     class Result(models.TextChoices):
@@ -85,6 +84,13 @@ class RiskAssessment(models.Model):
                 name="assessment_score_0_to_100",
             ),
         ]
+    @staticmethod
+    def result_for(score):
+        if score >= 60:
+            return RiskAssessment.Result.HIGH
+        if score >= 25:
+            return RiskAssessment.Result.REVIEW
+        return RiskAssessment.Result.LOW
 
     def __str__(self):
         return f"{self.transaction.reference}: {self.get_result_display()} ({self.score})"

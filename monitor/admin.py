@@ -27,6 +27,8 @@ class TransactionAdmin(NoDeleteAdmin):
     list_display = ("reference", "corporate", "type", "status", "amount", "created_at")
     list_filter = ("type", "status")
     search_fields = ("reference",)
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(SubmissionLog)

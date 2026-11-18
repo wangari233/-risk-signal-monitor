@@ -17,6 +17,13 @@ class RiskModelTests(TestCase):
     def setUp(self):
         self.corporate = Corporate.objects.create(name="Corporate A")
 
+    def test_result_for_covers_every_band_edge(self):
+        self.assertEqual(RiskAssessment.result_for(0), RiskAssessment.Result.LOW)
+        self.assertEqual(RiskAssessment.result_for(24), RiskAssessment.Result.LOW)
+        self.assertEqual(RiskAssessment.result_for(25), RiskAssessment.Result.REVIEW)
+        self.assertEqual(RiskAssessment.result_for(59), RiskAssessment.Result.REVIEW)
+        self.assertEqual(RiskAssessment.result_for(60), RiskAssessment.Result.HIGH)
+        self.assertEqual(RiskAssessment.result_for(100), RiskAssessment.Result.HIGH)
     def make_transaction(self, reference):
         return Transaction.objects.create(
             corporate=self.corporate,
@@ -30,7 +37,7 @@ class RiskModelTests(TestCase):
         return RiskAssessment.objects.create(
             transaction=self.make_transaction(reference),
             score=score,
-            result=RiskAssessment.Result.LOW,
+            result=RiskAssessment.result_for(score),
         )
 
     def test_score_above_100_is_rejected(self):
