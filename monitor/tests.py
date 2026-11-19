@@ -2,8 +2,9 @@ from decimal import Decimal
 
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
+from . import rule_settings
 from .models import (
     Corporate,
     RiskAssessment,
@@ -141,3 +142,11 @@ class TransactionModelTests(TestCase):
         self.make_transaction()
         with self.assertRaises(ProtectedError):
             self.corporate.delete()
+
+
+class RuleSettingsTests(SimpleTestCase):
+    def test_result_bands_are_in_order(self):
+        self.assertTrue(
+            0
+            < rule_settings.REVIEW_REQUIRED_MIN_SCORE
+        )

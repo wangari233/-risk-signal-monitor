@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from .rule_settings import HIGH_RISK_MIN_SCORE, REVIEW_REQUIRED_MIN_SCORE
 
 
 class Corporate(models.Model):
@@ -94,9 +95,9 @@ class RiskAssessment(models.Model):
         ]
     @staticmethod
     def result_for(score):
-        if score >= 60:
+        if score >= HIGH_RISK_MIN_SCORE:
             return RiskAssessment.Result.HIGH
-        if score >= 25:
+        if score >= REVIEW_REQUIRED_MIN_SCORE:
             return RiskAssessment.Result.REVIEW
         return RiskAssessment.Result.LOW
 
