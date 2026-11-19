@@ -1,12 +1,13 @@
 from dataclasses import dataclass
-from datetime import timedelta
 
 from .models import Transaction
+from .rule_settings import (
+    REPEATED_FAILURES_LIMIT,
+    REPEATED_FAILURES_POINTS,
+    REPEATED_FAILURES_WINDOW,
+)
 
 REPEATED_FAILURES_CODE = "REPEATED_FAILURES"
-REPEATED_FAILURES_POINTS = 30
-REPEATED_FAILURES_LIMIT = 3
-REPEATED_FAILURES_WINDOW = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)

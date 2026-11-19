@@ -3,9 +3,10 @@ from decimal import Decimal
 
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
+from . import rule_settings
 from .models import (
     Corporate,
     RiskAssessment,
@@ -14,6 +15,7 @@ from .models import (
     TriggeredRule,
 )
 from .rules import check_repeated_failures
+
 
 class RiskModelTests(TestCase):
     def setUp(self):
@@ -32,8 +34,20 @@ class RiskModelTests(TestCase):
         return RiskAssessment.objects.create(
             transaction=self.make_transaction(reference),
             score=score,
-            result=RiskAssessment.Result.LOW,
+            result=RiskAssessment.result_for(score),
         )
+
+    def test_result_for_covers_every_band_edge(self):
+        self.assertEqual(RiskAssessment.result_for(0), RiskAssessment.Result.LOW)
+        self.assertEqual(RiskAssessment.result_for(24), RiskAssessment.Result.LOW)
+        self.assertEqual(RiskAssessment.result_for(25), RiskAssessment.Result.REVIEW)
+        self.assertEqual(RiskAssessment.result_for(59), RiskAssessment.Result.REVIEW)
+        self.assertEqual(RiskAssessment.result_for(60), RiskAssessment.Result.HIGH)
+        self.assertEqual(RiskAssessment.result_for(100), RiskAssessment.Result.HIGH)
+
+    def test_assessment_result_matches_its_score(self):
+        assessment = self.make_assessment(score=95)
+        self.assertEqual(assessment.result, RiskAssessment.Result.HIGH)
 
     def test_score_above_100_is_rejected(self):
         with self.assertRaises(IntegrityError):
@@ -75,6 +89,23 @@ class RiskModelTests(TestCase):
             assessment.review_status, RiskAssessment.ReviewStatus.PENDING
         )
 
+    def test_submission_can_record_which_corporate_sent_it(self):
+        log = SubmissionLog.objects.create(
+            corporate=self.corporate, reference="TXN-000001", accepted=False
+        )
+        self.assertEqual(log.corporate, self.corporate)
+
+    def test_submission_from_unknown_corporate_is_allowed(self):
+        log = SubmissionLog.objects.create(reference="TXN-000002", accepted=False)
+        self.assertIsNone(log.corporate)
+
+    def test_corporate_with_submissions_cannot_be_deleted(self):
+        SubmissionLog.objects.create(
+            corporate=self.corporate, reference="TXN-000003", accepted=True
+        )
+        with self.assertRaises(ProtectedError):
+            self.corporate.delete()
+
 
 class TransactionModelTests(TestCase):
     def setUp(self):
@@ -113,4 +144,14 @@ class TransactionModelTests(TestCase):
     def test_corporate_with_transactions_cannot_be_deleted(self):
         self.make_transaction()
         with self.assertRaises(ProtectedError):
-            self.corporate.delete()                    
+            self.corporate.delete()
+
+
+class RuleSettingsTests(SimpleTestCase):
+    def test_result_bands_are_in_order(self):
+        self.assertTrue(
+            0
+            < rule_settings.REVIEW_REQUIRED_MIN_SCORE
+            < rule_settings.HIGH_RISK_MIN_SCORE
+            <= rule_settings.MAX_SCORE
+        )
