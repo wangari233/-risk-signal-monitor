@@ -146,6 +146,73 @@ class TransactionModelTests(TestCase):
         with self.assertRaises(ProtectedError):
             self.corporate.delete()
 
+class RepeatedFailuresRuleTests(TestCase):
+    def setUp(self):
+        self.corporate = Corporate.objects.create(name="Corporate A")
+        self.base = timezone.now()  # fixed reference point for every test
+        self.counter = 0
+
+    def make_txn(self, status, minutes_before=0, seconds_before=0, corporate=None):
+        self.counter += 1
+        return Transaction.objects.create(
+            corporate=corporate or self.corporate,
+            reference=f"TXN-{self.counter:06d}",
+            type=Transaction.Type.COLLECTION,
+            status=status,
+            amount=Decimal("100.00"),
+            created_at=self.base
+            - timedelta(minutes=minutes_before, seconds=seconds_before),
+        )
+
+    def test_two_failures_do_not_fire(self):
+        self.make_txn(Transaction.Status.FAILED, minutes_before=2)
+        latest = self.make_txn(Transaction.Status.FAILED)
+        self.assertIsNone(check_repeated_failures(latest))
+
+    def test_third_failure_fires(self):
+        self.make_txn(Transaction.Status.FAILED, minutes_before=2)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=1)
+        latest = self.make_txn(Transaction.Status.FAILED)
+        result = check_repeated_failures(latest)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.rule_code, "REPEATED_FAILURES")
+        self.assertEqual(result.points, 30)
+        self.assertIn("3 failed attempts", result.reason)
+
+    def test_failures_spread_over_an_hour_do_not_fire(self):
+        self.make_txn(Transaction.Status.FAILED, minutes_before=60)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=30)
+        latest = self.make_txn(Transaction.Status.FAILED)
+        self.assertIsNone(check_repeated_failures(latest))
+
+    def test_success_after_three_failures_fires(self):
+        self.make_txn(Transaction.Status.FAILED, minutes_before=5)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=4)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=3)
+        latest = self.make_txn(Transaction.Status.SUCCESSFUL)
+        result = check_repeated_failures(latest)
+        self.assertIsNotNone(result)
+        self.assertIn("3 failed attempts", result.reason)
+
+    def test_failure_exactly_ten_minutes_earlier_counts(self):
+        self.make_txn(Transaction.Status.FAILED, minutes_before=10)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=1)
+        latest = self.make_txn(Transaction.Status.FAILED)
+        self.assertIsNotNone(check_repeated_failures(latest))
+
+    def test_failure_just_outside_the_window_does_not_count(self):
+        self.make_txn(Transaction.Status.FAILED, minutes_before=10, seconds_before=1)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=1)
+        latest = self.make_txn(Transaction.Status.FAILED)
+        self.assertIsNone(check_repeated_failures(latest))
+
+    def test_other_corporates_failures_do_not_count(self):
+        other = Corporate.objects.create(name="Corporate B")
+        self.make_txn(Transaction.Status.FAILED, minutes_before=2, corporate=other)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=1, corporate=other)
+        latest = self.make_txn(Transaction.Status.FAILED)
+        self.assertIsNone(check_repeated_failures(latest))
+
 
 class RuleSettingsTests(SimpleTestCase):
     def test_result_bands_are_in_order(self):
