@@ -15,7 +15,7 @@ from .models import (
     Transaction,
     TriggeredRule,
 )
-from .rules import RuleResult, check_repeated_failures
+from .rules import RuleResult, check_repeated_failures, check_unusual_amount
 from .scoring import assess_transaction
 
 
@@ -215,6 +215,97 @@ class RepeatedFailuresRuleTests(TestCase):
         self.make_txn(Transaction.Status.FAILED, minutes_before=1, corporate=other)
         latest = self.make_txn(Transaction.Status.FAILED)
         self.assertIsNone(check_repeated_failures(latest))
+
+
+class UnusualAmountRuleTests(TestCase):
+    def setUp(self):
+        self.corporate = Corporate.objects.create(name="Corporate A")
+        self.base = timezone.now()
+        self.counter = 0
+
+    def make_txn(
+        self,
+        amount,
+        status=Transaction.Status.SUCCESSFUL,
+        minutes_before=0,
+        corporate=None,
+    ):
+        self.counter += 1
+        return Transaction.objects.create(
+            corporate=corporate or self.corporate,
+            reference=f"TXN-{self.counter:06d}",
+            type=Transaction.Type.COLLECTION,
+            status=status,
+            amount=Decimal(amount),
+            created_at=self.base - timedelta(minutes=minutes_before),
+        )
+
+    def add_history(
+        self,
+        count,
+        amount="100.00",
+        status=Transaction.Status.SUCCESSFUL,
+        corporate=None,
+    ):
+        """Create `count` earlier transactions, all an hour or more before base."""
+        for i in range(count):
+            self.make_txn(
+                amount, status=status, minutes_before=60 + i, corporate=corporate
+            )
+
+    def test_fewer_than_five_earlier_successes_is_skipped(self):
+        self.add_history(4)
+        latest = self.make_txn("10000.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_amount_over_five_times_the_average_fires(self):
+        self.add_history(5)
+        latest = self.make_txn("600.00")
+        result = check_unusual_amount(latest)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.rule_code, "UNUSUAL_AMOUNT")
+        self.assertEqual(result.points, 25)
+        self.assertIn("600.00", result.reason)
+
+    def test_exactly_five_times_the_average_does_not_fire(self):
+        self.add_history(5)
+        latest = self.make_txn("500.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_just_over_five_times_the_average_fires(self):
+        self.add_history(5)
+        latest = self.make_txn("500.01")
+        self.assertIsNotNone(check_unusual_amount(latest))
+
+    def test_failed_history_does_not_count(self):
+        self.add_history(4)
+        self.add_history(3, status=Transaction.Status.FAILED)
+        latest = self.make_txn("10000.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_other_corporates_history_does_not_count(self):
+        other = Corporate.objects.create(name="Corporate B")
+        self.add_history(5, corporate=other)
+        latest = self.make_txn("10000.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_later_transactions_do_not_count(self):
+        self.add_history(4)
+        self.make_txn("100.00", minutes_before=-5)
+        self.make_txn("100.00", minutes_before=-6)
+        self.make_txn("100.00", minutes_before=-7)
+        latest = self.make_txn("10000.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_exact_boundary_with_cents_does_not_fire(self):
+        self.add_history(5, amount="33.33")
+        latest = self.make_txn("166.65")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_one_cent_over_with_cents_fires(self):
+        self.add_history(5, amount="33.33")
+        latest = self.make_txn("166.66")
+        self.assertIsNotNone(check_unusual_amount(latest))
 
 
 def fake_rule(code, points):
