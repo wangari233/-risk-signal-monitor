@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
@@ -14,7 +15,8 @@ from .models import (
     Transaction,
     TriggeredRule,
 )
-from .rules import check_repeated_failures
+from .rules import RuleResult, check_repeated_failures
+from .scoring import assess_transaction
 
 
 class RiskModelTests(TestCase):
@@ -146,6 +148,7 @@ class TransactionModelTests(TestCase):
         with self.assertRaises(ProtectedError):
             self.corporate.delete()
 
+
 class RepeatedFailuresRuleTests(TestCase):
     def setUp(self):
         self.corporate = Corporate.objects.create(name="Corporate A")
@@ -212,6 +215,97 @@ class RepeatedFailuresRuleTests(TestCase):
         self.make_txn(Transaction.Status.FAILED, minutes_before=1, corporate=other)
         latest = self.make_txn(Transaction.Status.FAILED)
         self.assertIsNone(check_repeated_failures(latest))
+
+
+def fake_rule(code, points):
+    """A stand-in rule that always fires, so scoring can be tested on its own."""
+    return lambda txn: RuleResult(code, points, "test reason")
+
+
+class AssessTransactionTests(TestCase):
+    def setUp(self):
+        self.corporate = Corporate.objects.create(name="Corporate A")
+        self.base = timezone.now()
+        self.counter = 0
+
+    def make_txn(self, status=Transaction.Status.SUCCESSFUL, minutes_before=0):
+        self.counter += 1
+        return Transaction.objects.create(
+            corporate=self.corporate,
+            reference=f"TXN-{self.counter:06d}",
+            type=Transaction.Type.COLLECTION,
+            status=status,
+            amount=Decimal("100.00"),
+            created_at=self.base - timedelta(minutes=minutes_before),
+        )
+
+    def test_nothing_fires_gives_low_risk_with_no_triggered_rules(self):
+        assessment = assess_transaction(self.make_txn())
+        self.assertEqual(assessment.score, 0)
+        self.assertEqual(assessment.result, RiskAssessment.Result.LOW)
+        self.assertEqual(assessment.triggered_rules.count(), 0)
+        self.assertEqual(
+            assessment.review_status, RiskAssessment.ReviewStatus.PENDING
+        )
+
+    def test_real_rule_fires_and_is_recorded(self):
+        self.make_txn(Transaction.Status.FAILED, minutes_before=2)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=1)
+        latest = self.make_txn(Transaction.Status.FAILED)
+        assessment = assess_transaction(latest)
+        self.assertEqual(assessment.score, 30)
+        self.assertEqual(assessment.result, RiskAssessment.Result.REVIEW)
+        triggered = assessment.triggered_rules.get()
+        self.assertEqual(triggered.rule_code, "REPEATED_FAILURES")
+        self.assertEqual(triggered.points, 30)
+
+    def test_points_add_up(self):
+        rules = [fake_rule("FAKE_A", 30), fake_rule("FAKE_B", 35)]
+        assessment = assess_transaction(self.make_txn(), rules=rules)
+        self.assertEqual(assessment.score, 65)
+        self.assertEqual(assessment.result, RiskAssessment.Result.HIGH)
+        self.assertEqual(assessment.triggered_rules.count(), 2)
+
+    def test_score_is_capped_at_100(self):
+        rules = [
+            fake_rule("FAKE_A", 40),
+            fake_rule("FAKE_B", 35),
+            fake_rule("FAKE_C", 30),
+        ]
+        assessment = assess_transaction(self.make_txn(), rules=rules)
+        self.assertEqual(assessment.score, 100)
+        self.assertEqual(assessment.result, RiskAssessment.Result.HIGH)
+        self.assertEqual(assessment.triggered_rules.count(), 3)
+
+    def test_assessing_twice_changes_nothing(self):
+        txn = self.make_txn()
+        rules = [fake_rule("FAKE_A", 30)]
+        first = assess_transaction(txn, rules=rules)
+        second = assess_transaction(txn, rules=rules)
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(RiskAssessment.objects.filter(transaction=txn).count(), 1)
+        self.assertEqual(first.triggered_rules.count(), 1)
+
+    def test_unsaved_transaction_is_refused(self):
+        unsaved = Transaction(
+            corporate=self.corporate,
+            reference="TXN-UNSAVED",
+            type=Transaction.Type.COLLECTION,
+            status=Transaction.Status.SUCCESSFUL,
+            amount=Decimal("100.00"),
+        )
+        with self.assertRaises(ValueError):
+            assess_transaction(unsaved)
+
+    def test_a_failure_while_saving_leaves_no_assessment(self):
+        txn = self.make_txn()
+        with patch(
+            "monitor.scoring.TriggeredRule.objects.create",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(RuntimeError):
+                assess_transaction(txn, rules=[fake_rule("FAKE_A", 30)])
+        self.assertEqual(RiskAssessment.objects.filter(transaction=txn).count(), 0)
 
 
 class RuleSettingsTests(SimpleTestCase):
