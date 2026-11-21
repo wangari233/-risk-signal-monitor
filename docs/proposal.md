@@ -1,4 +1,4 @@
-**TRANSACTION RISK SIGNAL MONITOR PROJECT**
+# Transaction Risk Signal Monitor Project
 
 ## Problem Statement
 
@@ -18,7 +18,7 @@ For this case I will build a Transaction Risk Signal Monitor that checks each tr
 
 The project uses synthetic data only and does not connect to production systems, real customer data or payment credentials.
 
-**Selected Risk Signals**
+## Selected Risk Signals
 
 The monitor checks each transaction against the rules below. Each triggered rule adds points to a risk score.
 
@@ -29,7 +29,7 @@ The monitor checks each transaction against the rules below. Each triggered rule
 | 3 | Amount far from normal activity. | A transaction much larger than the account’s own usual activity. | Amount is more than 5 times the account’s average of previous successful transactions. Otherwise the rule is skipped and the output says so.| 25 |
 | 4 | Rapid funding then payout. | Money coming in and going out immediately. | A payout of 80% or more of a recent deposit within 30 minutes. | 35 |
 
-**Scoring and results**
+## Scoring and results
 
 The score is the sum of the points of all triggered rules limited at 100.
 
@@ -39,35 +39,35 @@ The score is the sum of the points of all triggered rules limited at 100.
 | 25 to 59  | Review Required |
 | 60 to 100 | High Risk       |
 
-**Why each rule was chosen**
+## Why each rule was chosen
 
 The rules were chosen because they are simple, explainable and testable with synthetic data.
 
-1.  **Repeated failed attempts**
+### Repeated failed attempts
 
 Many failed attempts followed by a success can suggest that someone is guessing details until one works.
 
 3 failures in 10 minutes are above normal user error but still early enough to be useful.
 
-2.  **Duplicate reference**
+### Duplicate reference
 
 A repeated reference can mean that the same transaction reference is submitted more than once.
 
 A reference that already exists is either a duplicate or it isn’t, which is why it carries the highest points.
 
-3.  **Amount far from normal**
+### Amount far from normal
 
 PesaWay’s current checks include fixed limits and unusually large first transactions. This rule compares a transaction with the account’s own history so it can catch an amount that is normal for one account but unusual for another.
 
-4.  **Rapid funding then payout**
+### Rapid funding then payout
 
 Money coming in and leaving almost immediately is a recognized risk pattern because it leaves little time for a problem to be noticed.
 
-**Proposed Data Model**
+## Proposed Data Model
 
 The monitor stores incoming transactions and for each one, the risk assessment it produced, the individual rules that fired and the outcome of the human review.
 
-1.  **Corporate**
+### Corporate
 
 | **Field** | **Type** | **Notes** |
 |----|----|----|
@@ -75,7 +75,7 @@ The monitor stores incoming transactions and for each one, the risk assessment i
 | Name | Text | Synthetic name only |
 | created_at | Datetime | Used to tell new accounts from established ones. |
 
-2.  **Transaction**
+### Transaction
 
 | **Field**   | **Type**                 | **Notes**                         |
 |-------------|--------------------------|-----------------------------------|
@@ -89,7 +89,7 @@ The monitor stores incoming transactions and for each one, the risk assessment i
 | Destination | Text                     | Synthetic phone or account        |
 | created_at  | Datetime                 | Used by all the time-window rules |
 
-3.  **Submission Log**
+### Submission Log
 
 | **Field**   | **Type**             | **Notes**                              |
 |-------------|----------------------|----------------------------------------|
@@ -98,7 +98,7 @@ The monitor stores incoming transactions and for each one, the risk assessment i
 | received_at | Datetime             |                                        |
 | Accepted    | Boolean              | False if rejected as duplicate         |
 
-4.  **Risk Assessment**
+### Risk Assessment
 
 | **Field** | **Type** | **Notes** |
 |----|----|----|
@@ -111,7 +111,7 @@ The monitor stores incoming transactions and for each one, the risk assessment i
 | reviewed_at | Datetime, Optional |  |
 | assessed_at | Datetime |  |
 
-5.  **Triggered rule**
+### Triggered rule
 
 | **Field** | **Type** | **Notes** |
 |----|----|----|
@@ -121,11 +121,11 @@ The monitor stores incoming transactions and for each one, the risk assessment i
 | Points | Integer |  |
 | Reason | Text | Plain-language explanation, e.g. “4 failed attempts in 10 minutes” |
 
-**Expected Inputs and Outputs**
+## Expected Inputs and Outputs
 
-**Inputs**
+### Inputs
 
-1.  **Transaction record**
+#### Transaction record
 
 | **Field**   | **Example**          | **Rules**                            |
 |-------------|----------------------|--------------------------------------|
@@ -138,17 +138,16 @@ The monitor stores incoming transactions and for each one, the risk assessment i
 | Destination | “0700000000”         | Synthetic only                       |
 | created_at  | 2026-11-12 10.20.00  | Required                             |
 
-2.  **Rule settings**
+#### Rule settings
 
 For example: failed attempts = 3, window = 10 minutes, points = 30
 
-3.  **Transaction history**
+#### Transaction history
 
 The monitor reads earlier transactions and submissions for the same corporate to check the time-window rules, the average amount and duplicate references.
 
-**How the data arrives:** Either one transaction at a time from a Comma-Separated Value file of synthetic transactions.
-
-**Outputs**
+**How the data arrives:** Either one transaction at a time, or as a batch from a Comma-Separated Value file of synthetic transactions.
+### Outputs
 
 | **Output** | **Example** |
 |----|----|
@@ -158,7 +157,7 @@ The monitor reads earlier transactions and submissions for the same corporate to
 | Reason per rule | “4 failed attempts within 10 minutes”; “Payout was 90% of a deposit made 15 minutes earlier” |
 | Review status | Pending |
 
-**Error handling**
+### Error handling
 
 **Invalid input:** Is rejected with a clear message and not recorded as a normal transaction.
 
@@ -168,15 +167,15 @@ The monitor reads earlier transactions and submissions for the same corporate to
 
 **Exactly at a threshold** e.g. 3 failures triggers, 2 does not and tested.
 
-**\**
 
-**Testing Approach**
+
+## Testing Approach
 
 The monitor will be tested with synthetic data only.
 
 **Tools:** Python with Django’s built-in test framework using a temporary test database so no demonstration is touched.
 
-1.  **Unit tests for each rule**
+### Unit tests for each rule
 
 | **Rule** | **Should activate** | **Should not activate** | **Boundary** |
 |----|----|----|----|
@@ -185,7 +184,7 @@ The monitor will be tested with synthetic data only.
 | Amount far from normal | 6 times the average with 5 or more past transactions | 2 times the average | Exactly 5 times the average; exactly 5 past transactions. |
 | Rapid funding then payout | Payout of 90% of a deposit within 20 minutes | Payout of 50%; payout 2 hours later | Exactly 80% exactly 30 minutes |
 
-2.  **Scoring and result tests**
+### Scoring and result tests
 
 - No rules activated gives score 0 and Low Risk.
 
@@ -197,7 +196,7 @@ The monitor will be tested with synthetic data only.
 
 - Scores at the band edges (24, 25, 59, 60) give the correct result label.
 
-3.  **Money correctness tests**
+### Money correctness tests
 
 - Amounts are stored and compared as decimal never floats.
 
@@ -209,7 +208,7 @@ The monitor will be tested with synthetic data only.
 
 - The amount in the output matches the amount in the input exactly.
 
-4.  **Failure tests**
+### Failure tests
 
 - Missing or invalid fields are rejected with a clear error.
 
@@ -225,7 +224,7 @@ The monitor will be tested with synthetic data only.
 
 - A malformed row in a CSV file does not stop the rest of the batch.
 
-5.  **Integration and end-to-end tests**
+### Integration and end-to-end tests
 
 - A CSV file of synthetic transactions is processed from start to finish with the expected results compared to the actual results.
 
@@ -233,7 +232,7 @@ The monitor will be tested with synthetic data only.
 
 - The original transaction is never changed or deleted by the monitor.
 
-6.  **Measuring how well the rules work**
+### Measuring how well the rules work
 
 Using a labelled synthetic dataset, record:
 
@@ -243,9 +242,9 @@ Using a labelled synthetic dataset, record:
 
 - What you changed after seeing the results and why.
 
-**Synthetic Data Plan**
+## Synthetic Data Plan
 
-1.  **Rules for the data**
+### Rules for the data
 
 Corporate names are created e.g. Corporate A, Corporate B.
 
@@ -255,7 +254,7 @@ References follow a made-up format e.g. TXN-000001
 
 Amounts are decimal values with two decimal places in Kenyan Shillings.
 
-2.  **Dataset structure**
+### Dataset structure
 
 | **Column** | **Purpose** |
 |----|----|
@@ -263,7 +262,7 @@ Amounts are decimal values with two decimal places in Kenyan Shillings.
 | expected_result | The result you expect is Low Risk, Review Required or High Risk which is used to check the monitor’s output |
 | Scenario | A short label such as normal or rapid_funding_payout so that you can see what each row is meant to test |
 
-3.  **Scenarios to generate**
+### Scenarios to generate
 
 | **Scenario** | **What the data looks like** |
 |----|----|
@@ -275,13 +274,13 @@ Amounts are decimal values with two decimal places in Kenyan Shillings.
 | Combined risk | A transaction that activates two or more rules to test scoring and high risk. |
 | Bad input | Missing fields, zero or negative amounts, unknown corporate and invalid dates |
 
-4.  **Size**
+### Size
 
 > **Test fixtures:** A few rows per scenario written by hand so each test is easy to understand.
 >
 > **Demonstration dataset:** Around 200 to 500 generated transactions across 5 to 10 corporates with about 10 to 15 percent deliberately risky.
 
-5.  **How the data is generated**
+### How the data is generated
 
 A Python script builds normal activity first.
 
@@ -291,7 +290,7 @@ It writes the CSV with expected_result filled in.
 
 Hand-written fixtures cover the boundary and bad-input cases, since exact values matter there.
 
-6.  **Where it lives in the project**
+### Where it lives in the project
 
 ```
 risk-signal-monitor/
@@ -313,7 +312,7 @@ risk-signal-monitor/
   README.md
 ```
 
-7.  **Limits**
+### Limits
 
 - Synthetic data shows that the rules work as designed but it cannot show how accurate they would be on real PesaWay’s traffic.
 
