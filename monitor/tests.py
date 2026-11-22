@@ -15,7 +15,12 @@ from .models import (
     Transaction,
     TriggeredRule,
 )
-from .rules import RuleResult, check_repeated_failures, check_unusual_amount
+from .rules import (
+    RuleResult,
+    check_rapid_funding_payout,
+    check_repeated_failures,
+    check_unusual_amount,
+)
 from .scoring import assess_transaction
 
 
@@ -306,6 +311,111 @@ class UnusualAmountRuleTests(TestCase):
         self.add_history(5, amount="33.33")
         latest = self.make_txn("166.66")
         self.assertIsNotNone(check_unusual_amount(latest))
+
+
+class RapidFundingPayoutRuleTests(TestCase):
+    def setUp(self):
+        self.corporate = Corporate.objects.create(name="Corporate A")
+        self.base = timezone.now()  # the payout happens at this moment
+        self.counter = 0
+
+    def make_txn(
+        self,
+        type,
+        amount,
+        status=Transaction.Status.SUCCESSFUL,
+        minutes_before=0,
+        seconds_before=0,
+        corporate=None,
+    ):
+        self.counter += 1
+        return Transaction.objects.create(
+            corporate=corporate or self.corporate,
+            reference=f"TXN-{self.counter:06d}",
+            type=type,
+            status=status,
+            amount=Decimal(amount),
+            created_at=self.base
+            - timedelta(minutes=minutes_before, seconds=seconds_before),
+        )
+
+    def make_deposit(self, amount, minutes_before, **kwargs):
+        return self.make_txn(
+            Transaction.Type.COLLECTION, amount, minutes_before=minutes_before, **kwargs
+        )
+
+    def make_payout(self, amount, **kwargs):
+        return self.make_txn(Transaction.Type.PAYOUT, amount, **kwargs)
+
+    def test_payout_of_90_percent_of_a_recent_deposit_fires(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("90.00")
+        result = check_rapid_funding_payout(payout)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.rule_code, "RAPID_FUNDING_PAYOUT")
+        self.assertEqual(result.points, 35)
+        self.assertIn("90.0%", result.reason)
+
+    def test_payout_of_50_percent_does_not_fire(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("50.00")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_exactly_80_percent_fires(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("80.00")
+        self.assertIsNotNone(check_rapid_funding_payout(payout))
+
+    def test_just_under_80_percent_does_not_fire(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("79.99")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_deposit_exactly_30_minutes_earlier_counts(self):
+        self.make_deposit("100.00", minutes_before=30)
+        payout = self.make_payout("90.00")
+        self.assertIsNotNone(check_rapid_funding_payout(payout))
+
+    def test_deposit_just_outside_the_window_does_not_count(self):
+        self.make_deposit("100.00", minutes_before=30, seconds_before=1)
+        payout = self.make_payout("90.00")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_payout_with_no_deposits_does_not_fire(self):
+        payout = self.make_payout("90.00")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_two_deposits_add_up(self):
+        self.make_deposit("60.00", minutes_before=20)
+        self.make_deposit("40.00", minutes_before=10)
+        payout = self.make_payout("80.00")
+        self.assertIsNotNone(check_rapid_funding_payout(payout))
+
+    def test_a_collection_never_fires(self):
+        self.make_deposit("100.00", minutes_before=20)
+        collection = self.make_txn(Transaction.Type.COLLECTION, "90.00")
+        self.assertIsNone(check_rapid_funding_payout(collection))
+
+    def test_a_failed_payout_never_fires(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("90.00", status=Transaction.Status.FAILED)
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_other_corporates_deposits_do_not_count(self):
+        other = Corporate.objects.create(name="Corporate B")
+        self.make_deposit("100.00", minutes_before=20, corporate=other)
+        payout = self.make_payout("90.00")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_cents_just_enough_fires(self):
+        self.make_deposit("33.33", minutes_before=20)
+        payout = self.make_payout("26.67")
+        self.assertIsNotNone(check_rapid_funding_payout(payout))
+
+    def test_cents_just_short_does_not_fire(self):
+        self.make_deposit("33.33", minutes_before=20)
+        payout = self.make_payout("26.66")
+        self.assertIsNone(check_rapid_funding_payout(payout))
 
 
 def fake_rule(code, points):

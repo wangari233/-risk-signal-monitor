@@ -2,10 +2,18 @@
 
 from .models import RiskAssessment, TriggeredRule
 from .rule_settings import MAX_SCORE
-from .rules import check_repeated_failures, check_unusual_amount
+from .rules import (
+    check_rapid_funding_payout,
+    check_repeated_failures,
+    check_unusual_amount,
+)
 
 # Every rule the monitor runs. Add new rules here as they are written.
-RULES = [check_repeated_failures, check_unusual_amount]
+RULES = [
+    check_repeated_failures,
+    check_unusual_amount,
+    check_rapid_funding_payout,
+]
 
 
 def assess_transaction(txn, rules=None):
