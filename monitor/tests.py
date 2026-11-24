@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
@@ -14,7 +15,13 @@ from .models import (
     Transaction,
     TriggeredRule,
 )
-from .rules import check_repeated_failures
+from .rules import (
+    RuleResult,
+    check_rapid_funding_payout,
+    check_repeated_failures,
+    check_unusual_amount,
+)
+from .scoring import assess_transaction
 
 
 class RiskModelTests(TestCase):
@@ -146,6 +153,7 @@ class TransactionModelTests(TestCase):
         with self.assertRaises(ProtectedError):
             self.corporate.delete()
 
+
 class RepeatedFailuresRuleTests(TestCase):
     def setUp(self):
         self.corporate = Corporate.objects.create(name="Corporate A")
@@ -212,6 +220,293 @@ class RepeatedFailuresRuleTests(TestCase):
         self.make_txn(Transaction.Status.FAILED, minutes_before=1, corporate=other)
         latest = self.make_txn(Transaction.Status.FAILED)
         self.assertIsNone(check_repeated_failures(latest))
+
+
+class UnusualAmountRuleTests(TestCase):
+    def setUp(self):
+        self.corporate = Corporate.objects.create(name="Corporate A")
+        self.base = timezone.now()
+        self.counter = 0
+
+    def make_txn(
+        self,
+        amount,
+        status=Transaction.Status.SUCCESSFUL,
+        minutes_before=0,
+        corporate=None,
+    ):
+        self.counter += 1
+        return Transaction.objects.create(
+            corporate=corporate or self.corporate,
+            reference=f"TXN-{self.counter:06d}",
+            type=Transaction.Type.COLLECTION,
+            status=status,
+            amount=Decimal(amount),
+            created_at=self.base - timedelta(minutes=minutes_before),
+        )
+
+    def add_history(
+        self,
+        count,
+        amount="100.00",
+        status=Transaction.Status.SUCCESSFUL,
+        corporate=None,
+    ):
+        """Create `count` earlier transactions, all an hour or more before base."""
+        for i in range(count):
+            self.make_txn(
+                amount, status=status, minutes_before=60 + i, corporate=corporate
+            )
+
+    def test_fewer_than_five_earlier_successes_is_skipped(self):
+        self.add_history(4)
+        latest = self.make_txn("10000.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_amount_over_five_times_the_average_fires(self):
+        self.add_history(5)
+        latest = self.make_txn("600.00")
+        result = check_unusual_amount(latest)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.rule_code, "UNUSUAL_AMOUNT")
+        self.assertEqual(result.points, 25)
+        self.assertIn("600.00", result.reason)
+
+    def test_exactly_five_times_the_average_does_not_fire(self):
+        self.add_history(5)
+        latest = self.make_txn("500.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_just_over_five_times_the_average_fires(self):
+        self.add_history(5)
+        latest = self.make_txn("500.01")
+        self.assertIsNotNone(check_unusual_amount(latest))
+
+    def test_failed_history_does_not_count(self):
+        self.add_history(4)
+        self.add_history(3, status=Transaction.Status.FAILED)
+        latest = self.make_txn("10000.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_other_corporates_history_does_not_count(self):
+        other = Corporate.objects.create(name="Corporate B")
+        self.add_history(5, corporate=other)
+        latest = self.make_txn("10000.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_later_transactions_do_not_count(self):
+        self.add_history(4)
+        self.make_txn("100.00", minutes_before=-5)
+        self.make_txn("100.00", minutes_before=-6)
+        self.make_txn("100.00", minutes_before=-7)
+        latest = self.make_txn("10000.00")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_exact_boundary_with_cents_does_not_fire(self):
+        self.add_history(5, amount="33.33")
+        latest = self.make_txn("166.65")
+        self.assertIsNone(check_unusual_amount(latest))
+
+    def test_one_cent_over_with_cents_fires(self):
+        self.add_history(5, amount="33.33")
+        latest = self.make_txn("166.66")
+        self.assertIsNotNone(check_unusual_amount(latest))
+
+
+class RapidFundingPayoutRuleTests(TestCase):
+    def setUp(self):
+        self.corporate = Corporate.objects.create(name="Corporate A")
+        self.base = timezone.now()  # the payout happens at this moment
+        self.counter = 0
+
+    def make_txn(
+        self,
+        type,
+        amount,
+        status=Transaction.Status.SUCCESSFUL,
+        minutes_before=0,
+        seconds_before=0,
+        corporate=None,
+    ):
+        self.counter += 1
+        return Transaction.objects.create(
+            corporate=corporate or self.corporate,
+            reference=f"TXN-{self.counter:06d}",
+            type=type,
+            status=status,
+            amount=Decimal(amount),
+            created_at=self.base
+            - timedelta(minutes=minutes_before, seconds=seconds_before),
+        )
+
+    def make_deposit(self, amount, minutes_before, **kwargs):
+        return self.make_txn(
+            Transaction.Type.COLLECTION, amount, minutes_before=minutes_before, **kwargs
+        )
+
+    def make_payout(self, amount, **kwargs):
+        return self.make_txn(Transaction.Type.PAYOUT, amount, **kwargs)
+
+    def test_payout_of_90_percent_of_a_recent_deposit_fires(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("90.00")
+        result = check_rapid_funding_payout(payout)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.rule_code, "RAPID_FUNDING_PAYOUT")
+        self.assertEqual(result.points, 35)
+        self.assertIn("90.0%", result.reason)
+
+    def test_payout_of_50_percent_does_not_fire(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("50.00")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_exactly_80_percent_fires(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("80.00")
+        self.assertIsNotNone(check_rapid_funding_payout(payout))
+
+    def test_just_under_80_percent_does_not_fire(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("79.99")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_deposit_exactly_30_minutes_earlier_counts(self):
+        self.make_deposit("100.00", minutes_before=30)
+        payout = self.make_payout("90.00")
+        self.assertIsNotNone(check_rapid_funding_payout(payout))
+
+    def test_deposit_just_outside_the_window_does_not_count(self):
+        self.make_deposit("100.00", minutes_before=30, seconds_before=1)
+        payout = self.make_payout("90.00")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_payout_with_no_deposits_does_not_fire(self):
+        payout = self.make_payout("90.00")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_two_deposits_add_up(self):
+        self.make_deposit("60.00", minutes_before=20)
+        self.make_deposit("40.00", minutes_before=10)
+        payout = self.make_payout("80.00")
+        self.assertIsNotNone(check_rapid_funding_payout(payout))
+
+    def test_a_collection_never_fires(self):
+        self.make_deposit("100.00", minutes_before=20)
+        collection = self.make_txn(Transaction.Type.COLLECTION, "90.00")
+        self.assertIsNone(check_rapid_funding_payout(collection))
+
+    def test_a_failed_payout_never_fires(self):
+        self.make_deposit("100.00", minutes_before=20)
+        payout = self.make_payout("90.00", status=Transaction.Status.FAILED)
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_other_corporates_deposits_do_not_count(self):
+        other = Corporate.objects.create(name="Corporate B")
+        self.make_deposit("100.00", minutes_before=20, corporate=other)
+        payout = self.make_payout("90.00")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+    def test_cents_just_enough_fires(self):
+        self.make_deposit("33.33", minutes_before=20)
+        payout = self.make_payout("26.67")
+        self.assertIsNotNone(check_rapid_funding_payout(payout))
+
+    def test_cents_just_short_does_not_fire(self):
+        self.make_deposit("33.33", minutes_before=20)
+        payout = self.make_payout("26.66")
+        self.assertIsNone(check_rapid_funding_payout(payout))
+
+
+def fake_rule(code, points):
+    """A stand-in rule that always fires, so scoring can be tested on its own."""
+    return lambda txn: RuleResult(code, points, "test reason")
+
+
+class AssessTransactionTests(TestCase):
+    def setUp(self):
+        self.corporate = Corporate.objects.create(name="Corporate A")
+        self.base = timezone.now()
+        self.counter = 0
+
+    def make_txn(self, status=Transaction.Status.SUCCESSFUL, minutes_before=0):
+        self.counter += 1
+        return Transaction.objects.create(
+            corporate=self.corporate,
+            reference=f"TXN-{self.counter:06d}",
+            type=Transaction.Type.COLLECTION,
+            status=status,
+            amount=Decimal("100.00"),
+            created_at=self.base - timedelta(minutes=minutes_before),
+        )
+
+    def test_nothing_fires_gives_low_risk_with_no_triggered_rules(self):
+        assessment = assess_transaction(self.make_txn())
+        self.assertEqual(assessment.score, 0)
+        self.assertEqual(assessment.result, RiskAssessment.Result.LOW)
+        self.assertEqual(assessment.triggered_rules.count(), 0)
+        self.assertEqual(
+            assessment.review_status, RiskAssessment.ReviewStatus.PENDING
+        )
+
+    def test_real_rule_fires_and_is_recorded(self):
+        self.make_txn(Transaction.Status.FAILED, minutes_before=2)
+        self.make_txn(Transaction.Status.FAILED, minutes_before=1)
+        latest = self.make_txn(Transaction.Status.FAILED)
+        assessment = assess_transaction(latest)
+        self.assertEqual(assessment.score, 30)
+        self.assertEqual(assessment.result, RiskAssessment.Result.REVIEW)
+        triggered = assessment.triggered_rules.get()
+        self.assertEqual(triggered.rule_code, "REPEATED_FAILURES")
+        self.assertEqual(triggered.points, 30)
+
+    def test_points_add_up(self):
+        rules = [fake_rule("FAKE_A", 30), fake_rule("FAKE_B", 35)]
+        assessment = assess_transaction(self.make_txn(), rules=rules)
+        self.assertEqual(assessment.score, 65)
+        self.assertEqual(assessment.result, RiskAssessment.Result.HIGH)
+        self.assertEqual(assessment.triggered_rules.count(), 2)
+
+    def test_score_is_capped_at_100(self):
+        rules = [
+            fake_rule("FAKE_A", 40),
+            fake_rule("FAKE_B", 35),
+            fake_rule("FAKE_C", 30),
+        ]
+        assessment = assess_transaction(self.make_txn(), rules=rules)
+        self.assertEqual(assessment.score, 100)
+        self.assertEqual(assessment.result, RiskAssessment.Result.HIGH)
+        self.assertEqual(assessment.triggered_rules.count(), 3)
+
+    def test_assessing_twice_changes_nothing(self):
+        txn = self.make_txn()
+        rules = [fake_rule("FAKE_A", 30)]
+        first = assess_transaction(txn, rules=rules)
+        second = assess_transaction(txn, rules=rules)
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(RiskAssessment.objects.filter(transaction=txn).count(), 1)
+        self.assertEqual(first.triggered_rules.count(), 1)
+
+    def test_unsaved_transaction_is_refused(self):
+        unsaved = Transaction(
+            corporate=self.corporate,
+            reference="TXN-UNSAVED",
+            type=Transaction.Type.COLLECTION,
+            status=Transaction.Status.SUCCESSFUL,
+            amount=Decimal("100.00"),
+        )
+        with self.assertRaises(ValueError):
+            assess_transaction(unsaved)
+
+    def test_a_failure_while_saving_leaves_no_assessment(self):
+        txn = self.make_txn()
+        with patch(
+            "monitor.scoring.TriggeredRule.objects.create",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(RuntimeError):
+                assess_transaction(txn, rules=[fake_rule("FAKE_A", 30)])
+        self.assertEqual(RiskAssessment.objects.filter(transaction=txn).count(), 0)
 
 
 class RuleSettingsTests(SimpleTestCase):
